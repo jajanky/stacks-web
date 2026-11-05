@@ -118,6 +118,38 @@
     padding: 10px 26px; border-top: 5px solid var(--mag);
     background: repeating-linear-gradient(-45deg, rgba(255,45,149,.07) 0 10px, transparent 10px 20px);
   }
+  #tbar { position: fixed; top: 0; left: 0; height: 5px; width: 0; z-index: 3;
+    background: var(--mag); box-shadow: 0 0 12px rgba(255,45,149,.7); }
+  #tbar.red { background: #ff3b3b; animation: tbarblink 150ms steps(2) infinite; }
+  @keyframes tbarblink { 50% { opacity: .35; } }
+  #statline.go { display: flex; flex-direction: column; align-items: center; gap: 8px; }
+  #gscore {
+    font-family: "Archivo Black", "Arial Black", sans-serif;
+    font-size: 88px; line-height: 0.95; letter-spacing: 4px; color: #fff;
+    text-shadow: 6px 6px 0 rgba(255,45,149,.5);
+  }
+  #bestline { color: var(--dim); font-size: 13px; letter-spacing: 3px; }
+  #bestline b { font-family: "Archivo Black", "Arial Black", sans-serif; font-size: 30px; color: var(--yel);
+    text-shadow: 0 0 16px rgba(255,225,77,.55); margin-left: 6px; }
+  .newbest { color: var(--yel); font-weight: 700; font-size: 13px; letter-spacing: 3px;
+    animation: newbestblink 550ms steps(2) infinite; margin-left: 10px; }
+  @keyframes newbestblink { 50% { opacity: .2; } }
+  .sml { color: var(--dim); font-size: 13px; letter-spacing: 3px; }
+  #lb { margin-top: 6px; display: flex; flex-direction: column; gap: 6px; align-items: center; }
+  #lb .dim { color: var(--dim); font-size: 12px; letter-spacing: 2px; }
+  .lrow { font-size: 14px; letter-spacing: 2px; color: #cbb3dd; }
+  .lrow b { font-family: "Archivo Black", "Arial Black", sans-serif; color: #fff; margin-left: 14px; }
+  .lrow.me { color: var(--yel); }
+  .lrow.me b { color: var(--yel); text-shadow: 0 0 12px rgba(255,225,77,.6); }
+  #lbtagrow { display: flex; gap: 12px; align-items: center; justify-content: center; margin-top: 4px; }
+  #tagin { font-family: "Archivo Black", "Arial Black", sans-serif; font-size: 26px; letter-spacing: 6px;
+    width: 170px; padding: 6px 10px; text-align: center; color: var(--yel);
+    background: #14091f; border: 3px solid var(--mag); outline: none; text-transform: uppercase; }
+  #lbbtn { font-family: "Archivo Black", "Arial Black", sans-serif; font-size: 16px; letter-spacing: 4px;
+    padding: 10px 22px; background: var(--cyn); color: #08141c; border: 3px solid #fff;
+    cursor: pointer; box-shadow: 4px 4px 0 var(--mag); }
+  #lbbtn:disabled { opacity: .45; cursor: default; box-shadow: none; }
+  #lbstatus { font-size: 12px; letter-spacing: 3px; color: var(--dim); min-height: 16px; }
   @media (max-width: 480px) {
     #topbar { border-bottom-width: 3px; }
     #streak, #lives, #score, #bpmchip { padding: 8px 10px; gap: 2px; border-right-width: 3px; }
@@ -136,6 +168,10 @@
     #statline b { font-size: 26px; }
     #startbtn { font-size: 16px; letter-spacing: 4px; padding: 12px 34px; border-width: 3px; box-shadow: 6px 6px 0 var(--cyn); }
     #hint { padding: 8px 10px; font-size: 9px; letter-spacing: 2px; }
+    #gscore { font-size: 56px; letter-spacing: 2px; }
+    #bestline b { font-size: 22px; }
+    #tagin { font-size: 20px; width: 130px; letter-spacing: 4px; }
+    .lrow { font-size: 12px; }
   }
 </style>
 </head>
@@ -166,6 +202,7 @@
     <button id="startbtn">START</button>
   </div>
   <div id="hint">D F G H J K L &nbsp;=&nbsp; the pads &nbsp;·&nbsp; P = pause &nbsp;·&nbsp; ON THE BEAT = bonus</div>
+  <div id="tbar"></div>
 
 <script>
 "use strict";
@@ -291,6 +328,7 @@ function onBeatCheck() {
 // ---------- GL ----------
 const $ = id => document.getElementById(id);
 const cv = $("gl");
+const tbarEl = $("tbar");
 const gl = cv.getContext("webgl", { antialias: true, alpha: false, powerPreference: "high-performance" }) ||
            cv.getContext("experimental-webgl", { antialias: true, alpha: false });
 let W = 1, H = 1, DPR = 1;
@@ -820,6 +858,8 @@ const fsgData = new Float32Array([-1,-1, 1,-1, -1,1, 1,1]);
 let running = false, paused = false, over = false, roundOpen = true;
 let score = 0, streak = 0, stage = 0, stageDisp = 0, roundT0 = 0, totalCorrect = 0;
 let lives = 3, pauseT0 = 0, sessionBest = 0, maxStage = 0, keyReached = "E";
+// 8-beat round timer (AC-clock deadline, scales with BPM); frozen on pause via AC rebase
+let roundTimerAC = 0, roundTimerTotal = 0, roundTimerRemain = 0, timerFrac = 0, timerHot = 0;
 const keysVisited = new Set(["E"]);
 let hotPulse = 0, fxShake = 0, uRed = 0, uChroma = 0, uFlash = [0,0,0], uFlashA = 0;
 let promptPop = 0;
@@ -863,6 +903,13 @@ function newPrompt() {
   uFlashA = Math.max(uFlashA, 0.12);
   roundT0 = performance.now();
   roundOpen = true;
+  // round timer starts exactly at the prompt landing: 8 beats at the current BPM
+  if (AC) {
+    const spb = 60 / BPM;
+    roundTimerTotal = 8 * spb;
+    roundTimerAC = AC.currentTime + roundTimerTotal;
+    roundTimerRemain = 0;
+  } else roundTimerAC = 0;
 }
 function laterPrompt(ms) {
   // beat-quantized: queue the round change; the frame loop applies it exactly on
@@ -942,6 +989,7 @@ function answer(i, padEl) {
   const tri = TRIADS[ch];
   const P = PADPOS[i];
   const floatAt = { x: P.x, y: P.y + P.h / 2 + 0.25, z: P.z }; // anchor: top of the hit pad
+  roundTimerAC = 0; // answer landed: round timer stops
   if (correct) {
     const dt = performance.now() - roundT0;
     const speed = Math.round(400 * Math.max(0, 1 - dt / 7000));
@@ -990,32 +1038,57 @@ function answer(i, padEl) {
     hud();
     laterPrompt(240);
   } else {
-    streak = 0; stage = Math.max(0, stage - 1); stageDisp = stage;
-    lives--;
-    missFX();
     padState[i] = 2; padShake[i] = 14; bakePad(i);
     setTimeout(() => { padState[i] = 0; bakePad(i); }, 260);
     const ti = PADORDER.indexOf(targetDeg);
     padState[ti] = 1; bakePad(ti); setTimeout(() => { padState[ti] = 0; bakePad(ti); }, 300);
     showFloat("WRONG — " + (CURINVERT ? ROMANF[targetDeg] : CHORDS[targetDeg].replace("dim", "\u00B0")), { slot: 0, color: [1, 0.55, 0.5], dur: 900, x: floatAt.x, y: floatAt.y, z: floatAt.z });
-    wrongZap();
     pimplosion(P.x, P.y, P.z, 60, [1.0, 0.33, 0.25], 4.5, 0.6, 5);
     // miss juice: red shock ring from the pad + stronger shake
     spawnRing(0.25, 4.5, P.y, 0.6, [1.0, 0.33, 0.25], 0.85, [P.x * pxS, 0, P.z]);
-    missN++;
-    fxShake = Math.max(fxShake, 20);
-    uRed = 1;
-    uChroma = Math.max(uChroma, 0.5);
-    fadeDown();
-    const bpmWas = BPM;
-    if (BPM !== BPM_BASE) {
-      setBPM(BPM_BASE, "down");
-      showFloat("TEMPO " + BPM_BASE, { slot: 1, color: [1, 0.45, 0.45], dur: 1000 });
-    }
-    hud();
-    if (lives <= 0) gameOver();
-    else laterPrompt(500);
+    wrongCore();
   }
+}
+// shared wrong-answer tail: also used by the 8-beat round timeout (same penalty)
+function wrongCore() {
+  streak = 0; stage = Math.max(0, stage - 1); stageDisp = stage;
+  lives--;
+  missFX();
+  wrongZap();
+  missN++;
+  fxShake = Math.max(fxShake, 20);
+  uRed = 1;
+  uChroma = Math.max(uChroma, 0.5);
+  fadeDown();
+  if (BPM !== BPM_BASE) {
+    setBPM(BPM_BASE, "down");
+    showFloat("TEMPO " + BPM_BASE, { slot: 1, color: [1, 0.45, 0.45], dur: 1000 });
+  }
+  hud();
+  if (lives <= 0) gameOver();
+  else laterPrompt(500);
+}
+// 8-beat round timer expired: same penalty as a wrong answer, prompt queue continues
+function roundTimeout() {
+  roundTimerAC = 0;
+  roundOpen = false;
+  showFloat("TIME", { slot: 0, color: [1, 0.4, 0.4], dur: 900 });
+  wrongCore();
+}
+// short quiet woodblock blip - the last-2-beats countdown tick
+function tickBlip(t) {
+  if (!AC) return;
+  t = t || AC.currentTime;
+  const g = AC.createGain(); g.connect(duck);
+  env(g, t, 0.001, 0.12, 0.05);
+  const o = osc("square", 1750, t, g);
+  o.stop(t + 0.08);
+  const g2 = AC.createGain(); g2.connect(duck);
+  env(g2, t, 0.001, 0.07, 0.03);
+  const n = AC.createBufferSource(); n.buffer = noiseBuf;
+  const bp = AC.createBiquadFilter(); bp.type = "bandpass"; bp.frequency.value = 2600; bp.Q.value = 3;
+  n.connect(bp); bp.connect(g2);
+  n.start(t); n.stop(t + 0.06);
 }
 function missFX() {
   const pip = pips[lives];
@@ -1027,11 +1100,13 @@ function togglePause() {
   paused = !paused;
   if (paused) {
     pauseT0 = performance.now();
+    if (AC && roundTimerAC > 0) roundTimerRemain = Math.max(0, roundTimerAC - AC.currentTime); // freeze the round timer
     showOverlay("PAUSED", "RESUME", null);
     duckAll(true);
   } else {
     roundT0 += performance.now() - pauseT0;
     if (pendingPromptMs > 0 && AC) pendingPromptAt = AC.currentTime; // rebase the queue minimum on resume so the prompt still lands on a beat tick
+    if (AC && roundTimerAC > 0) roundTimerAC = AC.currentTime + (roundTimerRemain || 0); // rebase the round timer on resume
     overlay.style.display = "none";
     duckAll(false);
   }
@@ -1041,14 +1116,16 @@ function showOverlay(title, btnText, statHtml) {
   $("ovtitle").innerHTML = title;
   $("startbtn").textContent = btnText;
   const sl = $("statline");
-  if (statHtml) { sl.innerHTML = statHtml; sl.style.display = "block"; }
+  if (statHtml) { sl.classList.remove("go"); sl.innerHTML = statHtml; sl.style.display = "block"; }
   else sl.style.display = "none";
+  $("ovtext").style.display = "";
   overlay.style.display = "flex";
 }
 function gameOver() {
   over = true;
   keyReached = KEYSYM;
   sessionBest = Math.max(sessionBest, score);
+  noteBest();
   pimplosion(0, 0, 0, 200, [1, 1, 1], 5, 1.6, 6);
   pimplosion(0, 0, 0, 140, [1.0, 0.18, 0.58], 3.5, 2.0, 5);
   pburst(0, 0, 0, 120, hueTgt, 6, 1.4, 5, 0.5);
@@ -1063,33 +1140,126 @@ function gameOver() {
     shimmerGain.gain.setTargetAtTime(0, t, 2);
     riserGain.gain.setTargetAtTime(0, t, 1);
   }
-  let disp = stage;
-  const strip = setInterval(() => {
-    disp = Math.max(0, disp - 1);
-    stageDisp = disp;
-    if (disp === 0) {
-      clearInterval(strip);
-      setTimeout(() => {
-        if (AC) duck.gain.setTargetAtTime(0, AC.currentTime, 0.4);
-        signalLossSting();
-        setTimeout(showEndScreen, 1400);
-      }, 500);
-    }
-  }, 600);
+  // instant death: fast stage strip (<=400ms total) + short tails, so the end
+  // overlay lands within ~0.75s of the last life being lost
+  const endStrip = () => {
+    setTimeout(() => {
+      if (AC) duck.gain.setTargetAtTime(0, AC.currentTime, 0.2);
+      signalLossSting();
+      setTimeout(showEndScreen, 250);
+    }, 100);
+  };
+  if (stage > 0) {
+    let disp = stage;
+    const perStep = Math.max(30, Math.min(90, 400 / stage));
+    const strip = setInterval(() => {
+      disp = Math.max(0, disp - 1);
+      stageDisp = disp;
+      if (disp === 0) { clearInterval(strip); endStrip(); }
+    }, perStep);
+  } else endStrip();
+}
+// ---------- persistent high score ----------
+let best = 0, bestNew = false;
+try {
+  const b = parseInt((window.localStorage && localStorage.getItem("stacks.best")) || "0", 10);
+  best = isFinite(b) && b > 0 ? b : 0;
+} catch (e) { best = 0; }
+function noteBest() {
+  if (score > best) {
+    best = score; bestNew = true;
+    try { localStorage.setItem("stacks.best", String(best)); } catch (e) {}
+  }
+}
+// ---------- arcade leaderboard ----------
+const LB_URL = "https://scores.mrzk.io/scores";
+let lbBusy = false;
+async function lbRequest(opts) {
+  const ctl = new AbortController();
+  const to = setTimeout(() => ctl.abort(), 2000); // ~2s cap: never hang the game-over screen
+  try {
+    const r = await fetch(LB_URL, Object.assign({ signal: ctl.signal }, opts || {}));
+    if (!r.ok) throw new Error("lb http " + r.status);
+    return await r.json();
+  } finally { clearTimeout(to); }
+}
+function renderTop(rows, top) {
+  rows.innerHTML = (top.slice(0, 5).map((e, i) =>
+    '<div class="lrow' + (e.you ? " me" : "") + '">' + (e.rank || i + 1) +
+    ' &nbsp; ' + e.name + ' &nbsp; <b>' + e.score + "</b></div>").join("") ||
+    '<span class="dim">NO SCORES YET</span>');
+}
+async function seedBoard() {
+  const rows = $("lbrows"), st = $("lbstatus");
+  if (!rows) return;
+  rows.innerHTML = '<span class="dim">CONTACTING ARCADE…</span>';
+  try {
+    const j = await lbRequest();
+    renderTop(rows, j.top || []);
+  } catch (e) {
+    rows.innerHTML = "";
+    if (st) st.textContent = "OFFLINE - BOARD UNAVAILABLE";
+  }
+}
+async function submitScore() {
+  const inp = $("tagin"), st = $("lbstatus"), rows = $("lbrows"), btn = $("lbbtn");
+  const name = inp ? inp.value : "";
+  if (!/^[A-Z0-9]{3,4}$/.test(name) || lbBusy) return;
+  lbBusy = true;
+  if (st) st.textContent = "SENDING…";
+  try {
+    const j = await lbRequest({ method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name, score: score }) });
+    if (rows) renderTop(rows, (j.top || []).map(e => Object.assign({}, e, { you: e.name === name })));
+    if (st) st.textContent = "RANK " + (j.rank || "?");
+    if (btn) { btn.disabled = true; btn.textContent = "SENT"; }
+  } catch (e) {
+    // server unreachable: offline fallback, SUBMIT stays enabled for a retry
+    if (st) st.textContent = "OFFLINE - SCORE NOT SENT (RETRY)";
+  }
+  lbBusy = false;
+}
+function bindLeaderboard() {
+  const inp = $("tagin"), btn = $("lbbtn");
+  if (!inp || !btn) return;
+  inp.addEventListener("input", () => {
+    const v = inp.value.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 4);
+    if (v !== inp.value) inp.value = v;
+    btn.disabled = v.length < 3;
+  });
+  btn.disabled = true;
+  btn.addEventListener("click", submitScore);
 }
 function showEndScreen() {
   running = false; paused = false;
-  showOverlay('SIGNAL<span>//LOST</span>', "RESTART",
-    '<span class="lbl">SCORE</span> <b>' + score + '</b> &nbsp;&nbsp; <span class="lbl">BEST</span> <b>' + sessionBest + "</b><br>" +
-    '<span class="lbl">KEY REACHED</span> ' + keyReached + " \u00B7 <span class=\"lbl\">KEYS</span> " + keysVisited.size +
-    " \u00B7 <span class=\"lbl\">BPM</span> " + maxBpm + " \u00B7 <span class=\"lbl\">BUILD</span> " + maxStage + "/10");
+  $("ovtext").style.display = "none";
+  $("ovtitle").innerHTML = 'GAME<span>//OVER</span>';
+  $("startbtn").textContent = "RESTART";
+  const sl = $("statline");
+  sl.classList.add("go");
+  sl.innerHTML =
+    '<span class="lbl">SCORE</span>' +
+    '<div id="gscore">' + score + "</div>" +
+    '<div id="bestline"><span class="lbl">HIGH SCORE</span><b>' + best + "</b>" +
+    (bestNew ? '<span class="newbest">NEW HIGH SCORE</span>' : "") + "</div>" +
+    '<div class="sml">KEYS VISITED ' + keysVisited.size + " \u00B7 MAX BPM " + maxBpm + "</div>" +
+    '<div id="lb"><span class="lbl">ARCADE SCORES</span>' +
+    '<div id="lbrows"></div>' +
+    '<div id="lbtagrow"><input id="tagin" maxlength="4" spellcheck="false" autocomplete="off" autocapitalize="characters" placeholder="TAG">' +
+    '<button id="lbbtn">SUBMIT</button></div>' +
+    '<div id="lbstatus"></div></div>';
+  sl.style.display = "flex";
+  overlay.style.display = "flex";
+  bindLeaderboard();
+  seedBoard();
 }
 function start() {
   if (!AC) initAudio();
   ensureAudio();
   score = 0; streak = 0; stage = 0; stageDisp = 0; totalCorrect = 0; lives = 3;
   over = false; maxStage = 0; keyReached = KEYSYM; maxBpm = BPM_BASE;
-  onBeatN = 0;
+  onBeatN = 0; bestNew = false;
+  roundTimerAC = 0; roundTimerRemain = 0; roundTimerTotal = 0;
   keysVisited.clear();
   roundNo = 0;
   resetRotation();
@@ -1103,6 +1273,8 @@ function start() {
   pips.forEach(p => { p.style.opacity = ""; p.classList.remove("lost", "flash"); });
   running = true; paused = false;
   pendingPromptMs = 0; promptLog.length = 0;
+  const gsl = $("statline"); gsl.classList.remove("go"); gsl.style.display = "none";
+  $("ovtext").style.display = "";
   overlay.style.display = "none";
   newPrompt();
   hud();
@@ -1358,6 +1530,14 @@ function beatPulse(t) {
     lastBeatSeen = lastBeat;
     beatKick = 1;
     beatTickN++;
+    // round timer red phase (final 2 beats): edge pulse + quiet woodblock tick each beat
+    if (roundOpen && !paused && !over && roundTimerAC > 0) {
+      const remainAC = roundTimerAC - t;
+      if (remainAC >= 0 && remainAC <= 2 * (60 / BPM)) {
+        uRed = Math.max(uRed, 0.85);
+        tickBlip(t);
+      }
+    }
     // core ring + a light ring expanding outward across the grid floor, both riding BPM heat
     spawnRing(1.2, (3.2 + stageDisp * 0.25) * (1 + heat * 0.9), 0, 0.5, hueTgt, 0.5);
     spawnRing(0.5, (6.0 + stageDisp * 0.3) * (1 + heat * 0.9), -2.2, 0.6, [1, 1, 1], 0.35);
@@ -1449,6 +1629,19 @@ function frame() {
       newPrompt();
     }
   }
+  // 8-beat round timer: expires as a wrong answer; frozen on pause (AC rebase)
+  timerFrac = 0; timerHot = 0;
+  if (running && !paused && !over && roundOpen && AC && roundTimerAC > 0 && roundTimerTotal > 0) {
+    const remain = roundTimerAC - AC.currentTime;
+    if (remain <= 0) roundTimeout();
+    else {
+      timerFrac = remain / roundTimerTotal;
+      const rb = remain / (60 / BPM);
+      if (rb < 2) timerHot = (2 - rb) / 2;
+    }
+  }
+  tbarEl.style.width = (Math.max(0, Math.min(1, timerFrac)) * 100).toFixed(1) + "%";
+  tbarEl.classList.toggle("red", timerHot > 0);
   // beat envelope
   const dtBeat = (now - lastBeat) / 1000;
   const k = Math.max(0, 1 - dtBeat / 0.35) * (0.25 + stageDisp * 0.045);
@@ -1566,8 +1759,10 @@ function frame() {
     gl.uniform1f(ringP.u.uA, a);
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, RN * 2 + 2);
   }
-  // core solid (beat-kick scale overshoot + glow, brighter as BPM climbs)
+  // core solid (beat-kick scale overshoot + glow, brighter as BPM climbs; core tint drifts red in the timer's final 2 beats)
   const coreScale = 0.95 * (1 + k * 1.1 + beatKick * 0.30);
+  const mixc = (c, tgt) => c + (tgt - c) * timerHot * 0.9;
+  const coreCol = [mixc(hueCur[0], 1.0), mixc(hueCur[1], 0.15), mixc(hueCur[2], 0.30)];
   gl.depthMask(true);
   gl.disable(gl.BLEND);
   gl.useProgram(coreP.p);
@@ -1575,7 +1770,7 @@ function frame() {
   gl.uniformMatrix4fv(coreP.u.uMV, false, V);
   gl.uniformMatrix4fv(coreP.u.uM, false, m4RotYScale(cam.t * 0.0004, coreScale));
   gl.uniform1f(coreP.u.uRc, rollC); gl.uniform1f(coreP.u.uRs, rollS);
-  gl.uniform3f(coreP.u.uCol, hueCur[0], hueCur[1], hueCur[2]);
+  gl.uniform3f(coreP.u.uCol, coreCol[0], coreCol[1], coreCol[2]);
   gl.uniform1f(coreP.u.uGlow, 0.8 + k * 1.6 + beatKick * 1.5 + heat * 0.9);
   gl.bindBuffer(gl.ARRAY_BUFFER, icoBuf);
   setAttribs(1);
@@ -1601,7 +1796,7 @@ function frame() {
   gl.drawArrays(gl.LINES, 0, icoWireArr.length / 3);
   // core glows (billboards)
   const glowSize = 2.4 * (1 + k * 0.4 + beatKick * 0.35 + heat * 0.2);
-  drawTextQuad(glowTex, 0, 0, 0, glowSize, glowSize, [hueCur[0], hueCur[1], hueCur[2], 0.22 + k * 0.3], true);
+  drawTextQuad(glowTex, 0, 0, 0, glowSize, glowSize, [coreCol[0], coreCol[1], coreCol[2], 0.22 + k * 0.3], true);
   drawTextQuad(glowTex, 0, 0, 0, 1.15 * (1 + k * 0.5), 1.15 * (1 + k * 0.5), [1, 1, 1, 0.35 + k * 0.4], true);
   // pads (arc narrows with aspect so all 7 stay on screen on phones)
   padScreen = [];
@@ -1732,7 +1927,13 @@ window.__stacke = {
   promptLog: () => promptLog.slice(),
   padpos: () => PADPOS.map(p => [p.x, p.y, p.z, p.h]),
   stats: () => ({ beatTicks: beatTickN, slams: slamN, keyEvs: keyEvN, milestones: milestoneN, hits: hitJuiceN, misses: missN, rings: rings.length, heat: +heat.toFixed(3) }),
-  floatInfo: () => floats.map(f => ({ msg: f.msg, ax: f.ax, ay: f.ay, az: f.az, vx: f.vx, vy: f.vy, t0: f.t0, lifeMs: f.life * 1000 }))
+  floatInfo: () => floats.map(f => ({ msg: f.msg, ax: f.ax, ay: f.ay, az: f.az, vx: f.vx, vy: f.vy, t0: f.t0, lifeMs: f.life * 1000 })),
+  timer: () => (AC && roundTimerAC > 0) ? +(Math.max(0, roundTimerAC - AC.currentTime)).toFixed(3) : null,
+  timerTotal: () => +roundTimerTotal.toFixed(3),
+  paused: () => paused,
+  best: () => best,
+  lbStatus: () => { const s = $("lbstatus"); return s ? s.textContent : ""; },
+  lbRows: () => { const s = $("lbrows"); return s ? s.textContent : ""; }
 };
 </script>
 </body>
