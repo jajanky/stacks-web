@@ -1054,6 +1054,7 @@ function ensureAudio() {
   if (AC && AC.state === "suspended") AC.resume();
 }
 const chip = $("audiochip");
+const hintEl = $("hint");
 chip.addEventListener("pointerdown", e => { e.preventDefault(); ensureAudio(); });
 document.addEventListener("pointerup", ensureAudio);
 $("startbtn").addEventListener("click", start);
@@ -1517,7 +1518,27 @@ function frame() {
   padScreen = [];
   const pxScale = Math.min(1, (W / H) * 0.62);
   const padW = Math.min(0.8, 0.9 * pxScale * 0.92);
-  const pyLift = (1 - pxScale) * 0.45; // portrait: raise the arc so pads clear the bottom hint bar
+  // raise the arc so pads clear the bottom hint bar (portrait needs the most)
+  let pyLift = (1 - pxScale) * 0.45;
+  // measure the real hint-bar top edge and lift the arc until the lowest pad clears the pink line
+  {
+    const hintTopCss = window.innerHeight - hintEl.getBoundingClientRect().height;
+    let low = null, sc = 0;
+    for (let i = 0; i < 7; i++) {
+      const Pp = PADPOS[i];
+      const px = Pp.x * pxScale, py = Pp.y + pyLift, pz = Pp.z;
+      const b = project([px, py - Pp.h / 2, pz], PV);
+      const c = project([px, py + 0.5, pz], PV);
+      const r0 = project([px, py, pz], PV);
+      if (b && c && r0) {
+        if (low === null || b[1] > low) { low = b[1]; sc = (r0[1] - c[1]) / 0.5; }
+      }
+    }
+    if (low !== null && sc > 0.5) {
+      const overshoot = low - (hintTopCss - 8); // 8px margin above the line
+      if (overshoot > 0) pyLift += Math.min(overshoot / sc, 0.9);
+    }
+  }
   for (let i = 0; i < 7; i++) {
     const Pp = PADPOS[i];
     const bob = running && !paused && !over ? Math.sin(cam.t * 0.002 + i * 0.8) * 0.015 : 0;
