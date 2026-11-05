@@ -377,9 +377,9 @@ const gridP = mkProg("grid",
   "void main(){ gl_FragColor = vec4(uCol * (uA * vF), uA * vF); }", ["aP", "aF"]);
 const ringP = mkProg("ring",
   "attribute vec3 aP;" +
-  "uniform mat4 uMVP; uniform float uR; uniform float uY; uniform float uRc; uniform float uRs;" +
+  "uniform mat4 uMVP; uniform float uR; uniform float uY; uniform float uRc; uniform float uRs; uniform vec3 uOff;" +
   "varying float vA; uniform float uA;" +
-  "void main(){ vec3 p = vec3(aP.x * uR, aP.y + uY, aP.z * uR); vA = uA;" +
+  "void main(){ vec3 p = vec3(aP.x * uR + uOff.x, aP.y + uY + uOff.y, aP.z * uR + uOff.z); vA = uA;" +
   " vec4 cp = uMVP * vec4(p, 1.0); " + ROLLVS + " }",
   "precision mediump float; varying float vA; uniform vec3 uCol;" +
   "void main(){ gl_FragColor = vec4(uCol * vA, vA); }", ["aP"]);
@@ -405,8 +405,14 @@ const wireP = mkProg("wire",
 const pointP = mkProg("point",
   "attribute vec3 aP; attribute vec4 aC; attribute float aS;" +
   "uniform mat4 uMVP; uniform float uH; uniform float uRc; uniform float uRs;" +
+  "uniform float uTime; uniform float uDrift;" +
   "varying vec4 vC;" +
-  "void main(){ vec4 cp = uMVP * vec4(aP, 1.0); vC = aC;" + ROLLVS +
+  "void main(){ vec3 p = aP;" +
+  " float dpar = 1.0 - clamp(length(aP) / 80.0, 0.0, 1.0);" +
+  " p.x = mod(p.x + uTime * (0.10 + 0.35 * dpar) * uDrift + 45.0, 90.0) - 45.0;" +
+  " p.z = mod(p.z + uTime * 0.06 * uDrift + 45.0, 90.0) - 45.0;" +
+  " p.y += sin(uTime * 0.30 + aS * 9.1) * 0.35 * uDrift;" +
+  " vec4 cp = uMVP * vec4(p, 1.0); vC = aC;" + ROLLVS +
   " gl_PointSize = aS * uH / max(0.3, cp.w) * 0.02; }",
   "precision mediump float; varying vec4 vC;" +
   "void main(){ float d = length(gl_PointCoord - vec2(0.5));" +
@@ -424,22 +430,27 @@ const textP = mkProg("text",
 const postP = mkProg("post",
   "attribute vec2 aP; varying vec2 vUv;" +
   "void main(){ vUv = aP * 0.5 + 0.5; gl_Position = vec4(aP, 0.0, 1.0); }",
-  "precision mediump float; varying vec2 vUv; uniform sampler2D uTex; uniform vec2 uRes;" +
+  "precision mediump float; varying vec2 vUv; uniform sampler2D uTex; uniform vec2 uRes; uniform float uTime;" +
   "uniform float uChroma; uniform float uBloom; uniform float uRed; uniform vec3 uFlash;" +
   "void main(){" +
-  " vec2 uv = vUv; vec2 c = uv - 0.5; vec2 co = c * uChroma * 0.05;" +
+  " vec2 uv = vUv; vec2 c = uv - 0.5; vec2 co = c * (0.10 + uChroma * 0.85) * 0.05;" +
   " vec4 sc;" +
   " sc.r = texture2D(uTex, uv - co).r;" +
   " sc.g = texture2D(uTex, uv).g;" +
   " sc.b = texture2D(uTex, uv + co).b;" +
   " sc.a = 1.0;" +
-  " vec2 o = 2.5 / uRes;" +
+  " vec2 o = 2.2 / uRes;" +
   " vec4 bl = texture2D(uTex, uv + vec2(o.x, 0.0)) + texture2D(uTex, uv - vec2(o.x, 0.0))" +
   "        + texture2D(uTex, uv + vec2(0.0, o.y)) + texture2D(uTex, uv - vec2(0.0, o.y));" +
-  " sc.rgb += bl.rgb * uBloom * 0.28;" +
+  " vec2 o2 = 4.4 / uRes;" +
+  " bl += texture2D(uTex, uv + o2) + texture2D(uTex, uv - o2)" +
+  "     + texture2D(uTex, uv + vec2(o2.x, -o2.y)) + texture2D(uTex, uv + vec2(-o2.x, o2.y));" +
+  " sc.rgb += bl.rgb * uBloom * 0.22;" +
   " sc.rgb *= 0.94 + 0.06 * sin(uv.y * uRes.y * 3.14159);" +
   " float v = smoothstep(1.05, 0.4, length(c) * 1.25);" +
   " sc.rgb *= v;" +
+  " float gn = fract(sin(dot(uv * uRes * 0.5 + uTime * 61.0, vec2(12.9898, 78.233))) * 43758.5453);" +
+  " sc.rgb += (gn - 0.5) * 0.03;" +
   " sc.rgb += uFlash;" +
   " sc.rgb += uRed * vec3(1.0, 0.12, 0.35) * smoothstep(0.30, 0.95, length(c) * 1.35);" +
   " gl_FragColor = sc; }", ["aP"]);
@@ -505,6 +516,21 @@ const icoWireBuf = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, icoWireBuf)
 const haloBuf = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, haloBuf); gl.bufferData(gl.ARRAY_BUFFER, haloV, gl.STATIC_DRAW);
 const gridBuf = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, gridBuf); gl.bufferData(gl.ARRAY_BUFFER, gridV, gl.STATIC_DRAW);
 const starBuf = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, starBuf); gl.bufferData(gl.ARRAY_BUFFER, starV, gl.STATIC_DRAW);
+// dust layer (denser near-field drift; capped, parallax via depth in the vertex shader)
+const DUSTN = 240;
+const dustV = new Float32Array(DUSTN * 8);
+for (let i = 0; i < DUSTN; i++) {
+  const th = Math.random() * TAU;
+  const r = 10 + Math.random() * 22;
+  dustV[i*8] = Math.cos(th) * r;
+  dustV[i*8+1] = -2 + Math.random() * 9;
+  dustV[i*8+2] = Math.sin(th) * r;
+  const c = DEGCOL[(Math.random() * 7) | 0];
+  const b = 0.35 + Math.random() * 0.45;
+  dustV[i*8+3] = c[0] * b; dustV[i*8+4] = c[1] * b; dustV[i*8+5] = c[2] * b; dustV[i*8+6] = 0.45;
+  dustV[i*8+7] = 1.4 + Math.random() * 1.3;
+}
+const dustBuf = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, dustBuf); gl.bufferData(gl.ARRAY_BUFFER, dustV, gl.STATIC_DRAW);
 const scrQuad = new Float32Array([-1,-1, 1,-1, -1,1, 1,1]);
 const scrQuadBuf = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, scrQuadBuf); gl.bufferData(gl.ARRAY_BUFFER, scrQuad, gl.STATIC_DRAW);
 // textures
@@ -713,11 +739,11 @@ function pimplosion(x, y, z, n, c, speed, life, size) {
       life * (0.6 + Math.random() * 0.6), size * (0.6 + Math.random()), c[0], c[1], c[2], 0);
   }
 }
-// beat rings (expanding 3D ribbons)
+// beat rings (expanding 3D ribbons, optional offset so a ring can radiate from a pad)
 const rings = [];
-function spawnRing(r0, v, y, life, c, alpha) {
-  if (rings.length > 16) rings.shift();
-  rings.push({ r: r0, v, y, life, age: 0, c, a: alpha });
+function spawnRing(r0, v, y, life, c, alpha, off) {
+  if (rings.length > 20) rings.shift();
+  rings.push({ r: r0, v, y, life, age: 0, c, a: alpha, off: off || [0, 0, 0] });
 }
 // camera
 const cam = { x: 0, y: 0.85, z: 8.6, tx: 0, ty: 0.15, tz: 0, shake: 0, punch: 0, dolly: 0, roll: 0, t: 0 };
@@ -797,6 +823,8 @@ let lives = 3, pauseT0 = 0, sessionBest = 0, maxStage = 0, keyReached = "E";
 const keysVisited = new Set(["E"]);
 let hotPulse = 0, fxShake = 0, uRed = 0, uChroma = 0, uFlash = [0,0,0], uFlashA = 0;
 let promptPop = 0;
+let beatKick = 0, heat = 0;
+let beatTickN = 0, slamN = 0, keyEvN = 0, milestoneN = 0, hitJuiceN = 0, missN = 0;
 let gridScroll = 0;
 let lastBeat = 0, lastBeatSeen = 0;
 function mult() { return Math.min(4, 1 + streak * 0.1); }
@@ -828,6 +856,11 @@ function newPrompt() {
   const big = CURINVERT ? CHORDS[targetDeg].replace("dim", "\u00B0") : p.f;
   bakePrompt(big);
   promptPop = 1;
+  slamN++;
+  // prompt slam-in: overshoot scale (decays via promptPop) + flash + brief chromatic split
+  uChroma = Math.max(uChroma, 0.9);
+  uFlash = [0.55, 0.93, 1.0];
+  uFlashA = Math.max(uFlashA, 0.12);
   roundT0 = performance.now();
   roundOpen = true;
 }
@@ -862,6 +895,7 @@ function setKey(name) {
   if (AC) retuneToKey();
 }
 function nextKey() {
+  keyEvN++;
   const pool = POOL_STAGES[Math.min(POOL_STAGES.length - 1, Math.floor(totalCorrect / 5))];
   let n;
   do { n = pool[Math.floor(Math.random() * pool.length)]; } while (pool.length > 1 && n === KEYSYM);
@@ -871,12 +905,15 @@ function nextKey() {
   spawnRing(1.3, 8.5, 0, 0.9, hueTgt, 0.8);
   pburst(0, 0, 0, 130, [1.0, 0.88, 0.30], 5.5, 0.9, 4.5, 0.4);
   pburst(0, 0, 0, 80, [1, 1, 1], 3.5, 0.7, 3.5, 0.3);
-  cam.dolly = Math.max(cam.dolly, 0.8);
+  cam.dolly = Math.max(cam.dolly, 1.2);
   cam.roll = (Math.random() < 0.5 ? -1 : 1) * 0.05;
   fxShake = Math.max(fxShake, 10);
-  uChroma = 1;
-  uFlashA = Math.max(uFlashA, 0.10);
+  uChroma = 1.2;
+  uFlashA = Math.max(uFlashA, 0.20);
   uFlash = [1.0, 0.88, 0.30];
+  // hue sweep: snap the whole world bright, then let it tween into the new key hue
+  hueCur = [1, 1, 1];
+  spawnRing(0.8, 10, -2.2, 0.9, hueTgt, 0.85);
   // I then V sting in the new key, soft, rides the current build level
   chordPluck(TRIADS[CHORDS[0]], 0.12);
   setTimeout(() => { if (running && !over) chordPluck(TRIADS[CHORDS[4]], 0.12); }, 120);
@@ -898,6 +935,7 @@ function answer(i, padEl) {
   if (!running || paused || over || !roundOpen) return;
   ensureAudio();
   const deg = PADORDER[i];
+  const pxS = Math.min(1, (W / H) * 0.62); // pad world-space x scale (same as the render arc)
   const correct = deg === targetDeg;
   roundOpen = false;
   const ch = CHORDS[deg];
@@ -928,6 +966,21 @@ function answer(i, padEl) {
     sparkle(tri);
     pburst(P.x, P.y, P.z, 70 + stage * 8, DEGCOL[deg], 4.5, 0.8, 5, 0.6);
     pburst(P.x, P.y, P.z, 26, [1, 1, 1], 2.6, 0.5, 3, 0.2);
+    // hit juice: expanding shock ring from the pad + small spark burst in the key color
+    spawnRing(0.25, 5.0, P.y, 0.7, DEGCOL[deg], 0.9, [P.x * pxS, 0, P.z]);
+    pburst(P.x * pxS, P.y, P.z, 18, [1, 1, 1], 3.2, 0.45, 2.5, 0);
+    hitJuiceN++;
+    // streak milestones: 10 / 25 / 50 - flash + big text moment in the float font
+    if (streak === 10 || streak === 25 || streak === 50) {
+      milestoneN++;
+      const mc = streak >= 25 ? [1.0, 0.88, 0.30] : [0.55, 0.93, 1.0];
+      showFloat(streak + " STREAK", { slot: 1, color: mc, dur: 1400, vy: 0.15 });
+      uFlash = mc;
+      uFlashA = Math.max(uFlashA, 0.25);
+      uChroma = Math.max(uChroma, 1);
+      spawnRing(1.0, 8, 0, 0.8, hueTgt, 0.9);
+      pburst(0, 2, 0.4, 110, [1, 1, 1], 5, 1.0, 4, 0.3);
+    }
     cam.punch = Math.max(cam.punch, 0.5);
     uChroma = Math.max(uChroma, 0.35);
     uFlashA = Math.max(uFlashA, ob ? 0.07 : 0.045);
@@ -947,7 +1000,10 @@ function answer(i, padEl) {
     showFloat("WRONG — " + (CURINVERT ? ROMANF[targetDeg] : CHORDS[targetDeg].replace("dim", "\u00B0")), { slot: 0, color: [1, 0.55, 0.5], dur: 900, x: floatAt.x, y: floatAt.y, z: floatAt.z });
     wrongZap();
     pimplosion(P.x, P.y, P.z, 60, [1.0, 0.33, 0.25], 4.5, 0.6, 5);
-    fxShake = Math.max(fxShake, 14);
+    // miss juice: red shock ring from the pad + stronger shake
+    spawnRing(0.25, 4.5, P.y, 0.6, [1.0, 0.33, 0.25], 0.85, [P.x * pxS, 0, P.z]);
+    missN++;
+    fxShake = Math.max(fxShake, 20);
     uRed = 1;
     uChroma = Math.max(uChroma, 0.5);
     fadeDown();
@@ -1300,7 +1356,11 @@ function beatPulse(t) {
   lastBeat = performance.now();
   if (lastBeat !== lastBeatSeen) {
     lastBeatSeen = lastBeat;
-    spawnRing(1.2, 3.2 + stageDisp * 0.25, 0, 0.5, hueTgt, 0.5);
+    beatKick = 1;
+    beatTickN++;
+    // core ring + a light ring expanding outward across the grid floor, both riding BPM heat
+    spawnRing(1.2, (3.2 + stageDisp * 0.25) * (1 + heat * 0.9), 0, 0.5, hueTgt, 0.5);
+    spawnRing(0.5, (6.0 + stageDisp * 0.3) * (1 + heat * 0.9), -2.2, 0.6, [1, 1, 1], 0.35);
   }
 }
 function chordPluck(ns, peak) {
@@ -1371,6 +1431,8 @@ function frame() {
   uFlashA *= 0.88;
   hotPulse *= 0.94;
   promptPop *= 0.86;
+  beatKick *= 0.82;
+  heat = (BPM - BPM_BASE) / (BPM_CAP - BPM_BASE); // 0..1 - how hot the scene is
   for (let i = 0; i < 3; i++) hueCur[i] += (hueTgt[i] - hueCur[i]) * Math.min(1, dt * 8);
   for (let i = 0; i < 7; i++) {
     if (padShake[i] > 0.3) padShake[i] *= 0.85; else padShake[i] = 0;
@@ -1455,24 +1517,28 @@ function frame() {
   gl.uniformMatrix4fv(gridP.u.uMVP, false, PV);
   gl.uniform1f(gridP.u.uScroll, gridScroll);
   gl.uniform1f(gridP.u.uRc, rollC); gl.uniform1f(gridP.u.uRs, rollS);
-  gl.uniform3f(gridP.u.uCol, hueCur[0] * 0.55, hueCur[1] * 0.55, hueCur[2] * 0.55);
-  gl.uniform1f(gridP.u.uA, 0.5 + k * 0.5);
+  gl.uniform3f(gridP.u.uCol, hueCur[0] * (0.55 + heat * 0.45), hueCur[1] * (0.55 + heat * 0.45), hueCur[2] * (0.55 + heat * 0.45));
+  gl.uniform1f(gridP.u.uA, 0.5 + k * 0.5 + heat * 0.3);
   gl.bindBuffer(gl.ARRAY_BUFFER, gridBuf);
   setAttribs(2);
   gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 16, 0);
   gl.vertexAttribPointer(1, 1, gl.FLOAT, false, 16, 12);
   gl.drawArrays(gl.LINES, 0, gridV.length / 4);
-  // stars
+  // stars + dust (drift + depth parallax in the vertex shader)
   gl.useProgram(pointP.p);
   gl.uniformMatrix4fv(pointP.u.uMVP, false, PV);
   gl.uniform1f(pointP.u.uH, H);
   gl.uniform1f(pointP.u.uRc, rollC); gl.uniform1f(pointP.u.uRs, rollS);
+  gl.uniform1f(pointP.u.uTime, cam.t * 0.001);
+  gl.uniform1f(pointP.u.uDrift, 1);
   gl.bindBuffer(gl.ARRAY_BUFFER, starBuf);
   setAttribs(3);
   gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 32, 0);
   gl.vertexAttribPointer(1, 4, gl.FLOAT, false, 32, 12);
   gl.vertexAttribPointer(2, 1, gl.FLOAT, false, 32, 28);
   gl.drawArrays(gl.POINTS, 0, STARS);
+  gl.bindBuffer(gl.ARRAY_BUFFER, dustBuf);
+  gl.drawArrays(gl.POINTS, 0, DUSTN);
   // halos (build stack)
   gl.useProgram(ringP.p);
   gl.uniformMatrix4fv(ringP.u.uMVP, false, PV);
@@ -1480,13 +1546,14 @@ function frame() {
   gl.bindBuffer(gl.ARRAY_BUFFER, haloBuf);
   setAttribs(1);
   gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 12, 0);
+  gl.uniform3f(ringP.u.uOff, 0, 0, 0);
   for (let i = 0; i < 10; i++) {
     const on = i < stageDisp;
     const hcol = hsl2rgb(((190 + i * 16) % 360) / 360, 0.85, 0.6);
     gl.uniform1f(ringP.u.uR, 1.45 - i * 0.055);
     gl.uniform1f(ringP.u.uY, -1.30 + i * 0.30);
     gl.uniform3f(ringP.u.uCol, hcol[0], hcol[1], hcol[2]);
-    gl.uniform1f(ringP.u.uA, on ? (0.4 + k * 0.6 + (i === stageDisp - 1 ? 0.25 : 0)) : 0.09);
+    gl.uniform1f(ringP.u.uA, on ? (0.4 + k * 0.6 + heat * 0.25 + (i === stageDisp - 1 ? 0.25 : 0)) : 0.09);
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, RN * 2 + 2);
   }
   // beat rings
@@ -1495,11 +1562,12 @@ function frame() {
     gl.uniform1f(ringP.u.uR, r.r);
     gl.uniform1f(ringP.u.uY, r.y);
     gl.uniform3f(ringP.u.uCol, r.c[0], r.c[1], r.c[2]);
+    gl.uniform3f(ringP.u.uOff, r.off[0], r.off[1], r.off[2]);
     gl.uniform1f(ringP.u.uA, a);
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, RN * 2 + 2);
   }
-  // core solid
-  const coreScale = 0.95 * (1 + k + hotPulse * 0.3);
+  // core solid (beat-kick scale overshoot + glow, brighter as BPM climbs)
+  const coreScale = 0.95 * (1 + k * 1.1 + beatKick * 0.30);
   gl.depthMask(true);
   gl.disable(gl.BLEND);
   gl.useProgram(coreP.p);
@@ -1508,7 +1576,7 @@ function frame() {
   gl.uniformMatrix4fv(coreP.u.uM, false, m4RotYScale(cam.t * 0.0004, coreScale));
   gl.uniform1f(coreP.u.uRc, rollC); gl.uniform1f(coreP.u.uRs, rollS);
   gl.uniform3f(coreP.u.uCol, hueCur[0], hueCur[1], hueCur[2]);
-  gl.uniform1f(coreP.u.uGlow, 0.8 + k * 1.6 + hotPulse * 1.2);
+  gl.uniform1f(coreP.u.uGlow, 0.8 + k * 1.6 + beatKick * 1.5 + heat * 0.9);
   gl.bindBuffer(gl.ARRAY_BUFFER, icoBuf);
   setAttribs(1);
   gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 12, 0);
@@ -1532,7 +1600,7 @@ function frame() {
   gl.uniform1f(wireP.u.uA, 0.5 + k * 0.5);
   gl.drawArrays(gl.LINES, 0, icoWireArr.length / 3);
   // core glows (billboards)
-  const glowSize = 2.4 * (1 + k * 0.4 + hotPulse * 0.3);
+  const glowSize = 2.4 * (1 + k * 0.4 + beatKick * 0.35 + heat * 0.2);
   drawTextQuad(glowTex, 0, 0, 0, glowSize, glowSize, [hueCur[0], hueCur[1], hueCur[2], 0.22 + k * 0.3], true);
   drawTextQuad(glowTex, 0, 0, 0, 1.15 * (1 + k * 0.5), 1.15 * (1 + k * 0.5), [1, 1, 1, 0.35 + k * 0.4], true);
   // pads (arc narrows with aspect so all 7 stay on screen on phones)
@@ -1572,8 +1640,8 @@ function frame() {
     const c3 = project([px - padW/2, py - Pp.h/2, pz], PV);
     padScreen[i] = (c0 && c1 && c2 && c3) ? [c0, c1, c2, c3] : null;
   }
-  // prompt + subline
-  const pw = 2.9 * (1 + promptPop * 0.22);
+  // prompt + subline (slam-in: overshoot scale settles via promptPop)
+  const pw = 2.9 * (1 + promptPop * 0.40);
   drawTextQuad(prTex, 0, 2.0, 0.4, pw, pw * 0.5, [hueCur[0] * 0.55 + 0.45, hueCur[1] * 0.55 + 0.45, hueCur[2] * 0.55 + 0.45, 1], true);
   drawTextQuad(subTex, 0, 1.22, 0.4, 2.1, 0.26, [0.25, 0.92, 1.0, 0.95], true);
   // floats - position is a closed-form function of age since spawn (deterministic,
@@ -1596,6 +1664,8 @@ function frame() {
     }
     gl.uniformMatrix4fv(pointP.u.uMVP, false, PV);
     gl.uniform1f(pointP.u.uRc, rollC); gl.uniform1f(pointP.u.uRs, rollS);
+    gl.uniform1f(pointP.u.uTime, 0);
+    gl.uniform1f(pointP.u.uDrift, 0);
     gl.bindBuffer(gl.ARRAY_BUFFER, tmpVBO);
     gl.bufferData(gl.ARRAY_BUFFER, pbuf.subarray(0, pn * 8), gl.DYNAMIC_DRAW);
     setAttribs(3);
@@ -1615,8 +1685,9 @@ function frame() {
   gl.bindTexture(gl.TEXTURE_2D, fboTex);
   gl.uniform1i(postP.u.uTex, 0);
   gl.uniform2f(postP.u.uRes, W, H);
+  gl.uniform1f(postP.u.uTime, cam.t * 0.001);
   gl.uniform1f(postP.u.uChroma, uChroma);
-  gl.uniform1f(postP.u.uBloom, 0.8 + k * 1.2);
+  gl.uniform1f(postP.u.uBloom, 0.9 + k * 1.1 + heat * 1.1);
   gl.uniform1f(postP.u.uRed, uRed);
   gl.uniform3f(postP.u.uFlash, uFlash[0] * uFlashA, uFlash[1] * uFlashA, uFlash[2] * uFlashA);
   gl.bindBuffer(gl.ARRAY_BUFFER, scrQuadBuf);
@@ -1660,6 +1731,7 @@ window.__stacke = {
   round: () => roundNo,
   promptLog: () => promptLog.slice(),
   padpos: () => PADPOS.map(p => [p.x, p.y, p.z, p.h]),
+  stats: () => ({ beatTicks: beatTickN, slams: slamN, keyEvs: keyEvN, milestones: milestoneN, hits: hitJuiceN, misses: missN, rings: rings.length, heat: +heat.toFixed(3) }),
   floatInfo: () => floats.map(f => ({ msg: f.msg, ax: f.ax, ay: f.ay, az: f.az, vx: f.vx, vy: f.vy, t0: f.t0, lifeMs: f.life * 1000 }))
 };
 </script>
