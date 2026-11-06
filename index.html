@@ -646,7 +646,8 @@ function bakePad(i) {
   x.save(); x.translate(160, 94); x.scale(a, 1);
   x.font = "700 100px 'Archivo Black', sans-serif";
   const tw = x.measureText(label).width;
-  const F = Math.min(64, 300 / (a * tw / 100));
+  const Fcap = label.length <= 2 ? 150 : 64; // single-char interval pads: big glyph, no blur
+  const F = Math.min(Fcap, 300 / (a * tw / 100));
   x.font = "700 " + F + "px 'Archivo Black', sans-serif";
   x.fillStyle = dark ? "#170a1e" : "#fff";
   x.fillText(label, 0, 0);
@@ -896,6 +897,13 @@ async function loadTunes() {
     const arr = (j && j.tunes && j.tunes.length) ? j.tunes : null;
     if (!arr) throw new Error("tunes payload empty");
     TUNES = arr;
+    // race fix: player tapped start before the dataset arrived - activate
+    // melody mode now (start() picked null, key changes never re-pick)
+    if (running && !melodyTune && !over) {
+      pickTune();
+      melodySeq.length = 0; melodyNoteLog.length = 0;
+      PADORDER = [0, 1, 2, 3, 4, 5, 6];
+    }
   } catch (e) {
     if (!melodyFellBack) {
       melodyFellBack = true;
@@ -930,7 +938,7 @@ function newPrompt() {
     const nq = lastQuarterAC + Math.round((AC.currentTime - lastQuarterAC) / spb) * spb;
     promptLog.push({ round: roundNo, deltaMs: +((AC.currentTime - nq) * 1000).toFixed(1) });
   }
-  PADORDER = shuffleArr([0,1,2,3,4,5,6]);
+  if (!melodyTune) PADORDER = shuffleArr([0,1,2,3,4,5,6]); // melody mode: fixed 1-7 order (learnable layout)
   let p;
   if (melodyTune) {
     // melody mode: prompt note = next tune note; inverted rounds are suppressed
