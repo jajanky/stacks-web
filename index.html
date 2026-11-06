@@ -642,7 +642,7 @@ function bakePad(i) {
   const pxScale = Math.min(1, (W / H) * 0.62);
   const padWq = Math.min(0.8, 0.9 * pxScale * 0.92);
   const a = Math.min(8, Math.max(1, 1 / ((padWq / 0.5) * 0.6)));
-  const label = CURINVERT ? ROMANF[deg] : CHORDS[deg].replace("dim", "\u00B0");
+  const label = melodyTune ? String(deg + 1) : (CURINVERT ? ROMANF[deg] : CHORDS[deg].replace("dim", "\u00B0"));
   x.save(); x.translate(160, 94); x.scale(a, 1);
   x.font = "700 100px 'Archivo Black', sans-serif";
   const tw = x.measureText(label).width;
@@ -941,7 +941,7 @@ function newPrompt() {
     melodyCursor = (melodyCursor + 1) % head.length;
     targetDeg = deg - 1; // game pad indices are 0-based; tune degrees are 1-7
     melodySeq.push(deg);
-    p = { f: CHORDS[deg - 1], d: deg };
+    p = { f: NOTE[(KEYROOT + SCL[deg - 1]) % 12], d: deg };
     lastChord = p.f;
   } else {
     CURINVERT = roundNo % 2 === 1;
@@ -998,7 +998,9 @@ function setKey(name) {
   const kc = $("keychip2");
   kc.classList.remove("chg"); void kc.offsetWidth; kc.classList.add("chg");
   const ex = $("fneg");
-  if (ex) ex.textContent = "e.g. \u201CV in " + KEYSYM + "\u201D = " + CHORDS[4] + " \u00B7 \u201C" + CHORDS[3] + " in " + KEYSYM + "\u201D = IV";
+  if (ex) ex.textContent = melodyTune
+    ? "e.g. \u201C3 in " + KEYSYM + "\u201D = " + NOTE[(KEYROOT + SCL[2]) % 12]
+    : "e.g. \u201CV in " + KEYSYM + "\u201D = " + CHORDS[4] + " \u00B7 \u201C" + CHORDS[3] + " in " + KEYSYM + "\u201D = IV";
   if (AC) retuneToKey();
 }
 function nextKey() {
@@ -1102,7 +1104,7 @@ function answer(i, padEl) {
     setTimeout(() => { padState[i] = 0; bakePad(i); }, 260);
     const ti = PADORDER.indexOf(targetDeg);
     padState[ti] = 1; bakePad(ti); setTimeout(() => { padState[ti] = 0; bakePad(ti); }, 300);
-    showFloat("WRONG — " + (CURINVERT ? ROMANF[targetDeg] : CHORDS[targetDeg].replace("dim", "\u00B0")), { slot: 0, color: [1, 0.55, 0.5], dur: 900, x: floatAt.x, y: floatAt.y, z: floatAt.z });
+    showFloat("WRONG — " + (melodyTune ? NOTE[(KEYROOT + SCL[targetDeg]) % 12] : (CURINVERT ? ROMANF[targetDeg] : CHORDS[targetDeg].replace("dim", "\u00B0"))), { slot: 0, color: [1, 0.55, 0.5], dur: 900, x: floatAt.x, y: floatAt.y, z: floatAt.z });
     pimplosion(P.x, P.y, P.z, 60, [1.0, 0.33, 0.25], 4.5, 0.6, 5);
     // miss juice: red shock ring from the pad + stronger shake
     spawnRing(0.25, 4.5, P.y, 0.6, [1.0, 0.33, 0.25], 0.85, [P.x * pxS, 0, P.z]);
@@ -1974,10 +1976,10 @@ window.__stacke = {
   tunes: () => TUNES.length, fallback: () => melodyFellBack,
   melody: () => melodyTune ? { title: melodyTune.title, composer: melodyTune.composer, head: melodyTune.head, cursor: melodyCursor } : null,
   seq: () => melodySeq.slice(), noteEvents: () => melodyNoteLog.slice(),
-  shownNote: () => CHORDS[targetDeg],
+  shownNote: () => melodyTune ? NOTE[(KEYROOT + SCL[targetDeg]) % 12] : CHORDS[targetDeg],
   bpm: () => BPM, maxbpm: () => maxBpm,
-  target: () => CHORDS[targetDeg], dir: () => (CURINVERT ? "inverted" : "normal"),
-  pads: () => PADORDER.map(d => CHORDS[d]),
+  target: () => melodyTune ? NOTE[(KEYROOT + SCL[targetDeg]) % 12] : CHORDS[targetDeg], dir: () => (melodyTune ? "melody" : (CURINVERT ? "inverted" : "normal")),
+  pads: () => PADORDER.map(d => melodyTune ? d + 1 : CHORDS[d]),
   answerIdx: () => PADORDER.indexOf(targetDeg),
   stage: () => stage, lives: () => lives, score: () => score, total: () => totalCorrect, open: () => roundOpen,
   fx: () => pn, fxgl: () => !!gl, onBeat: () => onBeatN, keys: () => keysVisited.size,
