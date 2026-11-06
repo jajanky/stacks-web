@@ -682,6 +682,8 @@ void 0;
 // prompt + subline
 const prCv = mkCanvas(1024, 512);
 const prTex = texFromCanvas(prCv);
+const subCv = mkCanvas(1024, 128);
+const subTex = texFromCanvas(subCv);
 let curBig = "E";
 function bakePrompt(big) {
   curBig = big;
@@ -698,6 +700,18 @@ function bakePrompt(big) {
   x.fillStyle = "#fff";
   x.fillText(big, 512, 240);
   reTex(prTex, prCv);
+}
+function bakeSub() {
+  const x = subCv.getContext("2d");
+  x.clearRect(0, 0, 1024, 128);
+  x.textAlign = "center"; x.textBaseline = "middle";
+  x.font = "700 56px 'Space Mono', monospace";
+  x.lineWidth = 10; x.strokeStyle = "rgba(10,4,16,0.9)";
+  const s = "IN KEY OF " + KEYSYM;
+  x.strokeText(s, 512, 64);
+  x.fillStyle = "#fff";
+  x.fillText(s, 512, 64);
+  reTex(subTex, subCv);
 }
 // float messages (3 slots, 3D quads)
 const floats = [0, 1, 2].map(i => {
@@ -948,10 +962,19 @@ function newPrompt() {
   let p;
   if (melodyTune) {
     // melody mode: prompt note = next tune note; inverted rounds are suppressed
-    // (they show chords, not melody notes)
+    // (they show chords, not melody notes). Root notes (degree 1) are SKIPPED:
+    // in the shown key the root's note name IS the key name ("E in key of E") -
+    // the prompt would add no information. If the whole tune is roots, present
+    // them anyway so the skip terminates.
     CURINVERT = false;
     const head = melodyTune.head;
-    const deg = head[melodyCursor % head.length][0];
+    let deg = head[melodyCursor % head.length][0];
+    if (head.some(n => n[0] !== 1)) {
+      while (deg === 1) {
+        melodyCursor = (melodyCursor + 1) % head.length;
+        deg = head[melodyCursor % head.length][0];
+      }
+    }
     melodyCursor = (melodyCursor + 1) % head.length;
     targetDeg = deg - 1; // game pad indices are 0-based; tune degrees are 1-7
     melodySeq.push(deg);
@@ -1005,6 +1028,7 @@ function setKey(name) {
   }
   hueTgt = keyHue(name);
   renderPads();
+  bakeSub();
   keysVisited.add(name);
   const kv = $("keyval");
   kv.textContent = KEYSYM;
@@ -1917,6 +1941,7 @@ function frame() {
   // prompt + subline (slam-in: overshoot scale settles via promptPop)
   const pw = 2.9 * (1 + promptPop * 0.40);
   drawTextQuad(prTex, 0, 2.0, 0.4, pw, pw * 0.5, [hueCur[0] * 0.55 + 0.45, hueCur[1] * 0.55 + 0.45, hueCur[2] * 0.55 + 0.45, 1], true);
+  drawTextQuad(subTex, 0, 1.22, 0.4, 2.1, 0.26, [0.25, 0.92, 1.0, 0.95], true);
   // floats - position is a closed-form function of age since spawn (deterministic,
   // anchored at the hit pad), never a per-frame += accumulation
   for (let i = 0; i < 3; i++) {
@@ -1977,8 +2002,9 @@ if (!gl) {
   gl.disable(gl.CULL_FACE);
   setKey("E");
   bakePrompt("E");
+  bakeSub();
   if (document.fonts && document.fonts.ready) {
-    document.fonts.ready.then(() => { renderPads(); bakePrompt(curBig); }).catch(() => {});
+    document.fonts.ready.then(() => { renderPads(); bakePrompt(curBig); bakeSub(); }).catch(() => {});
   }
   padsReady = true;
   requestAnimationFrame(frame);
