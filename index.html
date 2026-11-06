@@ -879,6 +879,50 @@ function hud() {
 let roundNo = 0, targetDeg = 4;
 let pendingPromptMs = 0, pendingPromptAt = 0;
 let promptLog = [];
+// ---------- melody mode ----------
+// a random tune from tunes.json is picked at session start (title/composer
+// revealed only at game over); each round the prompt note is the next tune
+// note (degree 1-7 in the current key - setKey() transposes the name when
+// the key shifts). When the tune is exhausted the cursor loops to note 0.
+// If tunes.json fails to load the game falls back to classic random prompts
+// (inverted rounds included) so it never breaks.
+let TUNES = [], melodyTune = null, melodyCursor = 0, melodyFellBack = false;
+let melodySeq = [], melodyNoteLog = [];
+async function loadTunes() {
+  try {
+    const r = await fetch("tunes.json", { cache: "no-store" });
+    if (!r.ok) throw new Error("tunes http " + r.status);
+    const j = await r.json();
+    const arr = (j && j.tunes && j.tunes.length) ? j.tunes : null;
+    if (!arr) throw new Error("tunes payload empty");
+    TUNES = arr;
+  } catch (e) {
+    if (!melodyFellBack) {
+      melodyFellBack = true;
+      console.log("[stacks] tunes.json unavailable (" + ((e && e.message) || "?") + ") - falling back to classic random-note mode");
+    }
+    TUNES = [];
+  }
+}
+function pickTune() {
+  melodyTune = TUNES.length ? TUNES[Math.floor(Math.random() * TUNES.length)] : null;
+  melodyCursor = 0;
+}
+loadTunes(); // fire-and-forget: classic mode kicks in if the dataset never arrives
+function melodyNote(t) {
+  // piano-ish short tone: fundamental + 2 harmonics, key-following via KEYROOT
+  if (!AC) return;
+  const m = KEYROOT + SCL[targetDeg];
+  const F = midi(m);
+  const parts = [[F, 0.9, "sine"], [F * 2, 0.32, "triangle"], [F * 3, 0.14, "triangle"]];
+  parts.forEach(function (pt) {
+    const g = AC.createGain(); g.connect(duck); g.connect(delaySend);
+    env(g, t, 0.004, 0.5 * pt[1], 0.35);
+    const o = AC.createOscillator(); o.type = pt[2]; o.frequency.value = pt[0];
+    o.connect(g); o.start(t); o.stop(t + 0.55);
+  });
+  melodyNoteLog.push({ m: m });
+}
 function newPrompt() {
   roundNo++;
   if (AC && lastQuarterAC) {
@@ -886,12 +930,25 @@ function newPrompt() {
     const nq = lastQuarterAC + Math.round((AC.currentTime - lastQuarterAC) / spb) * spb;
     promptLog.push({ round: roundNo, deltaMs: +((AC.currentTime - nq) * 1000).toFixed(1) });
   }
-  CURINVERT = roundNo % 2 === 1;
   PADORDER = shuffleArr([0,1,2,3,4,5,6]);
   let p;
-  do { p = pickPrompt(); } while (PROMPTS.length > 1 && p.f === lastChord);
-  lastChord = p.f;
-  targetDeg = p.d;
+  if (melodyTune) {
+    // melody mode: prompt note = next tune note; inverted rounds are suppressed
+    // (they show chords, not melody notes)
+    CURINVERT = false;
+    const head = melodyTune.head;
+    const deg = head[melodyCursor % head.length][0];
+    melodyCursor = (melodyCursor + 1) % head.length;
+    targetDeg = deg - 1; // game pad indices are 0-based; tune degrees are 1-7
+    melodySeq.push(deg);
+    p = { f: CHORDS[deg - 1], d: deg };
+    lastChord = p.f;
+  } else {
+    CURINVERT = roundNo % 2 === 1;
+    do { p = pickPrompt(); } while (PROMPTS.length > 1 && p.f === lastChord);
+    lastChord = p.f;
+    targetDeg = p.d;
+  }
   renderPads();
   const big = CURINVERT ? CHORDS[targetDeg].replace("dim", "\u00B0") : p.f;
   bakePrompt(big);
@@ -910,6 +967,9 @@ function newPrompt() {
     roundTimerAC = AC.currentTime + roundTimerTotal;
     roundTimerRemain = 0;
   } else roundTimerAC = 0;
+  // melody mode: sound the shown note exactly at prompt time (nothing plays
+  // during pause - this only runs when a prompt lands)
+  if (melodyTune && AC) melodyNote(AC.currentTime);
 }
 function laterPrompt(ms) {
   // beat-quantized: queue the round change; the frame loop applies it exactly on
@@ -1240,6 +1300,7 @@ function showEndScreen() {
   sl.innerHTML =
     '<span class="lbl">SCORE</span>' +
     '<div id="gscore">' + score + "</div>" +
+    (melodyTune ? '<div id="tuneline" class="sml">you just played: ' + melodyTune.title + " - " + melodyTune.composer + "</div>" : "") +
     '<div id="bestline"><span class="lbl">HIGH SCORE</span><b>' + best + "</b>" +
     (bestNew ? '<span class="newbest">NEW HIGH SCORE</span>' : "") + "</div>" +
     '<div class="sml">KEYS VISITED ' + keysVisited.size + " \u00B7 MAX BPM " + maxBpm + "</div>" +
@@ -1263,6 +1324,7 @@ function start() {
   keysVisited.clear();
   roundNo = 0;
   resetRotation();
+  pickTune(); melodySeq.length = 0; melodyNoteLog.length = 0;
   if (BPM !== BPM_BASE) setBPM(BPM_BASE, "down");
   setKey("E");
   if (AC) {
@@ -1909,6 +1971,10 @@ if (!gl) {
 // read-only debug hook (used by the headless lifecycle test)
 window.__stacke = {
   key: () => KEYSYM, chords: () => CHORDS.slice(), arp: () => ARP.slice(),
+  tunes: () => TUNES.length, fallback: () => melodyFellBack,
+  melody: () => melodyTune ? { title: melodyTune.title, composer: melodyTune.composer, head: melodyTune.head, cursor: melodyCursor } : null,
+  seq: () => melodySeq.slice(), noteEvents: () => melodyNoteLog.slice(),
+  shownNote: () => CHORDS[targetDeg],
   bpm: () => BPM, maxbpm: () => maxBpm,
   target: () => CHORDS[targetDeg], dir: () => (CURINVERT ? "inverted" : "normal"),
   pads: () => PADORDER.map(d => CHORDS[d]),
