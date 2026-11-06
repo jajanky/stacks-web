@@ -114,7 +114,7 @@
   @keyframes btnpulse { 0%,100% { box-shadow: 8px 8px 0 rgba(41,230,255,.55); } 50% { box-shadow: 8px 8px 0 var(--cyn), 0 0 34px rgba(255,45,149,.5); } }
   #hint {
     width: 100%; text-align: center;
-    font-size: 11px; color: var(--dim); letter-spacing: 3px;
+    font-size: 13px; color: #cbb9da; letter-spacing: 3px;
     padding: 10px 26px; border-top: 5px solid var(--mag);
     background: repeating-linear-gradient(-45deg, rgba(255,45,149,.07) 0 10px, transparent 10px 20px);
   }
@@ -167,7 +167,7 @@
     #overlay p { font-size: 13px; }
     #statline b { font-size: 26px; }
     #startbtn { font-size: 16px; letter-spacing: 4px; padding: 12px 34px; border-width: 3px; box-shadow: 6px 6px 0 var(--cyn); }
-    #hint { padding: 8px 10px; font-size: 9px; letter-spacing: 2px; }
+    #hint { padding: 8px 10px; font-size: 10px; letter-spacing: 2px; }
     #gscore { font-size: 56px; letter-spacing: 2px; }
     #bestline b { font-size: 22px; }
     #tagin { font-size: 20px; width: 130px; letter-spacing: 4px; }
@@ -335,7 +335,7 @@ let W = 1, H = 1, DPR = 1;
 let lastPadAsp = -1, padsReady = false;
 let fbo = null, fboTex = null, fboDepth = null;
 function resize() {
-  const d = Math.min(2, window.devicePixelRatio || 1);
+  const d = Math.min(3, window.devicePixelRatio || 1);
   const w = Math.max(1, Math.floor(window.innerWidth * d));
   const h = Math.max(1, Math.floor(window.innerHeight * d));
   if (d === DPR && w === W && h === H) return; // no-op fast path; called per frame (CDP viewport changes may not fire a resize event)
@@ -655,9 +655,9 @@ function bakePad(i) {
   x.save(); x.translate(160, 164); x.scale(a, 1);
   x.font = "700 100px 'Space Mono', monospace";
   const kw = x.measureText(KEYPAD[i]).width;
-  const F2 = Math.min(30, 300 / (a * kw / 100));
+  const F2 = Math.min(40, 300 / (a * kw / 100));
   x.font = "700 " + F2 + "px 'Space Mono', monospace";
-  x.fillStyle = dark ? "#170a1e" : "rgba(255,255,255,0.6)";
+  x.fillStyle = dark ? "#170a1e" : "rgba(255,255,255,0.85)";
   x.fillText(KEYPAD[i], 0, 0);
   x.restore();
   reTex(padTex[i], padCvs[i]);
@@ -682,8 +682,6 @@ void 0;
 // prompt + subline
 const prCv = mkCanvas(1024, 512);
 const prTex = texFromCanvas(prCv);
-const subCv = mkCanvas(1024, 128);
-const subTex = texFromCanvas(subCv);
 let curBig = "E";
 function bakePrompt(big) {
   curBig = big;
@@ -700,18 +698,6 @@ function bakePrompt(big) {
   x.fillStyle = "#fff";
   x.fillText(big, 512, 240);
   reTex(prTex, prCv);
-}
-function bakeSub() {
-  const x = subCv.getContext("2d");
-  x.clearRect(0, 0, 1024, 128);
-  x.textAlign = "center"; x.textBaseline = "middle";
-  x.font = "700 56px 'Space Mono', monospace";
-  x.lineWidth = 10; x.strokeStyle = "rgba(10,4,16,0.9)";
-  const s = "IN KEY OF " + KEYSYM;
-  x.strokeText(s, 512, 64);
-  x.fillStyle = "#fff";
-  x.fillText(s, 512, 64);
-  reTex(subTex, subCv);
 }
 // float messages (3 slots, 3D quads)
 const floats = [0, 1, 2].map(i => {
@@ -917,19 +903,39 @@ function pickTune() {
   melodyCursor = 0;
 }
 loadTunes(); // fire-and-forget: classic mode kicks in if the dataset never arrives
-function melodyNote(t) {
-  // piano-ish short tone: fundamental + 2 harmonics, key-following via KEYROOT
+// melody voice: the prompt note is SUSTAINED for the whole round (louder +
+// held, so the tune is actually heard as a line, not a blip); round end (answer
+// or timeout) decays it, the next prompt kills it early
+let melodyVoice = null;
+function melodyKill(t, dur) {
+  if (!melodyVoice || !AC) return;
+  const v = melodyVoice; melodyVoice = null;
+  try {
+    v.gain.gain.cancelScheduledValues(t);
+    v.gain.gain.setTargetAtTime(0.0001, t, dur / 3);
+    v.oscs.forEach(o => { try { o.stop(t + dur + 0.05); } catch (e) {} });
+  } catch (e) {}
+}
+function melodyStart(t) {
   if (!AC) return;
+  melodyKill(t, 0.12);
   const m = KEYROOT + SCL[targetDeg];
   const F = midi(m);
-  const parts = [[F, 0.9, "sine"], [F * 2, 0.32, "triangle"], [F * 3, 0.14, "triangle"]];
-  parts.forEach(function (pt) {
-    const g = AC.createGain(); g.connect(duck); g.connect(delaySend);
-    env(g, t, 0.004, 0.5 * pt[1], 0.35);
-    const o = AC.createOscillator(); o.type = pt[2]; o.frequency.value = pt[0];
-    o.connect(g); o.start(t); o.stop(t + 0.55);
+  const g = AC.createGain(); g.connect(duck); g.connect(delaySend);
+  g.gain.setValueAtTime(0.0001, t);
+  g.gain.linearRampToValueAtTime(0.62, t + 0.012); // sustain: no decay until melodyKill
+  const oscs = [];
+  [[1, 1.0, "sine"], [2, 0.42, "triangle"], [3, 0.18, "triangle"]].forEach(function (pt) {
+    const o = AC.createOscillator(); o.type = pt[2]; o.frequency.value = F * pt[0];
+    const g2 = AC.createGain(); g2.gain.value = pt[1];
+    o.connect(g2); g2.connect(g); o.start(t); oscs.push(o);
   });
+  melodyVoice = { oscs: oscs, gain: g };
   melodyNoteLog.push({ m: m });
+}
+function melodyEnd(t, dur) {
+  if (!AC) return;
+  melodyKill(t, dur || 0.15);
 }
 function newPrompt() {
   roundNo++;
@@ -975,9 +981,9 @@ function newPrompt() {
     roundTimerAC = AC.currentTime + roundTimerTotal;
     roundTimerRemain = 0;
   } else roundTimerAC = 0;
-  // melody mode: sound the shown note exactly at prompt time (nothing plays
-  // during pause - this only runs when a prompt lands)
-  if (melodyTune && AC) melodyNote(AC.currentTime);
+  // melody mode: the shown note sustains for the whole round (the audible line);
+  // nothing extra plays during pause (rounds do not open while paused)
+  if (melodyTune && AC) melodyStart(AC.currentTime);
 }
 function laterPrompt(ms) {
   // beat-quantized: queue the round change; the frame loop applies it exactly on
@@ -999,7 +1005,6 @@ function setKey(name) {
   }
   hueTgt = keyHue(name);
   renderPads();
-  bakeSub();
   keysVisited.add(name);
   const kv = $("keyval");
   kv.textContent = KEYSYM;
@@ -1103,6 +1108,7 @@ function answer(i, padEl) {
     uChroma = Math.max(uChroma, 0.35);
     uFlashA = Math.max(uFlashA, ob ? 0.07 : 0.045);
     uFlash = ob ? [1.0, 0.88, 0.30] : hueTgt;
+    if (melodyTune && AC) melodyEnd(AC.currentTime, 0.3); // answered: let the note ring out a beat
     // every correct answer moves the key
     nextKey();
     hud();
@@ -1121,6 +1127,7 @@ function answer(i, padEl) {
 }
 // shared wrong-answer tail: also used by the 8-beat round timeout (same penalty)
 function wrongCore() {
+  if (melodyTune && AC) melodyEnd(AC.currentTime, 0.12);
   streak = 0; stage = Math.max(0, stage - 1); stageDisp = stage;
   lives--;
   missFX();
@@ -1910,7 +1917,6 @@ function frame() {
   // prompt + subline (slam-in: overshoot scale settles via promptPop)
   const pw = 2.9 * (1 + promptPop * 0.40);
   drawTextQuad(prTex, 0, 2.0, 0.4, pw, pw * 0.5, [hueCur[0] * 0.55 + 0.45, hueCur[1] * 0.55 + 0.45, hueCur[2] * 0.55 + 0.45, 1], true);
-  drawTextQuad(subTex, 0, 1.22, 0.4, 2.1, 0.26, [0.25, 0.92, 1.0, 0.95], true);
   // floats - position is a closed-form function of age since spawn (deterministic,
   // anchored at the hit pad), never a per-frame += accumulation
   for (let i = 0; i < 3; i++) {
@@ -1971,9 +1977,8 @@ if (!gl) {
   gl.disable(gl.CULL_FACE);
   setKey("E");
   bakePrompt("E");
-  bakeSub();
   if (document.fonts && document.fonts.ready) {
-    document.fonts.ready.then(() => { renderPads(); bakePrompt(curBig); bakeSub(); }).catch(() => {});
+    document.fonts.ready.then(() => { renderPads(); bakePrompt(curBig); }).catch(() => {});
   }
   padsReady = true;
   requestAnimationFrame(frame);
@@ -1983,6 +1988,7 @@ window.__stacke = {
   key: () => KEYSYM, chords: () => CHORDS.slice(), arp: () => ARP.slice(),
   tunes: () => TUNES.length, fallback: () => melodyFellBack,
   melody: () => melodyTune ? { title: melodyTune.title, composer: melodyTune.composer, head: melodyTune.head, cursor: melodyCursor } : null,
+  voice: () => melodyVoice ? "sustaining" : "off",
   seq: () => melodySeq.slice(), noteEvents: () => melodyNoteLog.slice(),
   shownNote: () => melodyTune ? NOTE[(KEYROOT + SCL[targetDeg]) % 12] : CHORDS[targetDeg],
   bpm: () => BPM, maxbpm: () => maxBpm,
