@@ -807,6 +807,14 @@ for (let i = 0; i < 7; i++) {
   const t = (i - 3) / 3;
   PADPOS.push({ x: t * 2.7, y: -1.15 - Math.abs(t) * 0.30, z: 4.4 - Math.abs(t) * 0.9, w: 0.8, h: 0.5 });
 }
+// melody mode: the 6 pads are RE-CENTERED on the same arc (t = (i-2.5)/2.5 over
+// the full [-1,1] span) - the left 6 slots of the 7-pad arc would read as a
+// removed button (op callout 11-06)
+function padPos(i) {
+  if (!melodyUi()) return PADPOS[i];
+  const t = (i - 2.5) / 2.5;
+  return { x: t * 2.7, y: -1.15 - Math.abs(t) * 0.30, z: 4.4 - Math.abs(t) * 0.9, w: 0.8, h: 0.5 };
+}
 let padScreen = [];
 function project(p, M) {
   const c = m4Xform(M, [p[0], p[1], p[2], 1]);
@@ -1112,7 +1120,7 @@ function answer(i, padEl) {
   roundOpen = false;
   const ch = CHORDS[deg];
   const tri = TRIADS[ch];
-  const P = PADPOS[i];
+  const P = padPos(i);
   const floatAt = { x: P.x, y: P.y + P.h / 2 + 0.25, z: P.z }; // anchor: top of the hit pad
   roundTimerAC = 0; // answer landed: round timer stops
   if (correct) {
@@ -1946,7 +1954,7 @@ function frame() {
     let low = null, sc = 0;
     const nC = padCount();
     for (let i = 0; i < nC; i++) {
-      const Pp = PADPOS[i];
+      const Pp = padPos(i);
       const px = Pp.x * pxScale, py = Pp.y + pyLift, pz = Pp.z;
       const b = project([px, py - Pp.h / 2, pz], PV);
       const c = project([px, py + 0.5, pz], PV);
@@ -1963,7 +1971,7 @@ function frame() {
   const nP = padCount();
   for (let i = nP; i < 7; i++) padScreen[i] = null; // dark pads: not hit-testable
   for (let i = 0; i < nP; i++) {
-    const Pp = PADPOS[i];
+    const Pp = padPos(i);
     const bob = running && !paused && !over ? Math.sin(cam.t * 0.002 + i * 0.8) * 0.015 : 0;
     const jx = padShake[i] > 0 ? (Math.random() - 0.5) * padShake[i] * 0.01 : 0;
     const px = Pp.x * pxScale + jx, py = Pp.y + bob + pyLift, pz = Pp.z;
@@ -2070,7 +2078,7 @@ window.__stacke = {
   acState: () => AC ? AC.state : null,
   round: () => roundNo,
   promptLog: () => promptLog.slice(),
-  padpos: () => PADPOS.map(p => [p.x, p.y, p.z, p.h]),
+  padpos: () => [0, 1, 2, 3, 4, 5, 6].map(i => { const p = padPos(i); return [p.x, p.y, p.z, p.h]; }),
   stats: () => ({ beatTicks: beatTickN, slams: slamN, keyEvs: keyEvN, milestones: milestoneN, hits: hitJuiceN, misses: missN, rings: rings.length, heat: +heat.toFixed(3) }),
   floatInfo: () => floats.map(f => ({ msg: f.msg, ax: f.ax, ay: f.ay, az: f.az, vx: f.vx, vy: f.vy, t0: f.t0, lifeMs: f.life * 1000 })),
   timer: () => (AC && roundTimerAC > 0) ? +(Math.max(0, roundTimerAC - AC.currentTime)).toFixed(3) : null,
