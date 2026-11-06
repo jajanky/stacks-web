@@ -188,20 +188,16 @@
   <div id="overlay">
     <h1 id="ovtitle">STACK<span>S</span></h1>
     <p id="ovtext">
-      A function is shown. Hit the chord that is that function <span class="fn">in the shown key</span>.<br>
-      <span class="fn">Rounds alternate</span>: numeral appears - hit its chord. Chord appears - hit its numeral.<br>
-      <span class="fn">Pads shuffle every round</span> - position is never the answer.<br>
+      A note sounds — a tune you know. Hit the pad for its degree <span class="fn">in the shown key</span>.<br>
+      Tunes are real ones: Chopin, Bach, Debussy, Liszt. When a tune runs out, a <span class="fn">new random tune</span> starts.<br>
       <span class="fn">Every correct answer, the key changes.</span> Every 5 correct the tempo climbs <span class="fn">+5 BPM</span> (cap 200).<br>
-      <span class="fn">4/4 click: answer ON THE BEAT</span> (±90ms) for a bonus. <span class="fn">Points scale with BPM.</span><br>
-      Wrong → back to <span class="fn">80 BPM</span>, a life falls, a layer peels. <span class="fn">3 lives.</span><br>
-      Functions <span class="fn">rotate through the set (never I), no repeats</span> within a lap.<br>
-      Keys <span class="fn">D F G H J K L</span> = the pads · <span class="fn">P</span> = pause.<br>
-      <span class="fn" id="fneg">e.g. “V in E” = B</span>
+      <span class="fn">Answer ON THE BEAT</span> for a bonus. Wrong or late → back to <span class="fn">80 BPM</span>, a life falls. <span class="fn">3 lives.</span><br>
+      Keys <span class="fn">D F G H J K</span> = pads 2-7 · <span class="fn">P</span> = pause · <span class="fn" id="fneg">e.g. “3 in E” = G</span>
     </p>
     <div id="statline"></div>
     <button id="startbtn">START</button>
   </div>
-  <div id="hint">D F G H J K L &nbsp;=&nbsp; the pads &nbsp;·&nbsp; P = pause &nbsp;·&nbsp; ON THE BEAT = bonus</div>
+  <div id="hint">D F G H J K &nbsp;=&nbsp; pads 2-7 &nbsp;·&nbsp; P = pause &nbsp;·&nbsp; ON THE BEAT = bonus</div>
   <div id="tbar"></div>
 
 <script>
@@ -294,6 +290,15 @@ function pickPrompt() {
   return PROMPTS[idx];
 }
 let PADORDER = [0,1,2,3,4,5,6];
+// melody mode: the root (degree 1) is never prompted, so the "1" pad is dead
+// weight - melody mode runs 6 pads: degrees 2-7 on keys D F G H J K (physical
+// pad 6 / key L stays dark). Classic keeps all 7 pads, keys D F G H J K L.
+const MELODY_PADS = [1,2,3,4,5,6];
+// melody layout is locked in once the dataset arrives (TUNES non-empty): the
+// splash attract pads, the race-activation pads, and the running game all show
+// the same 6-pad 2-7 layout. Fallback (fetch failed) keeps the classic 7.
+function melodyUi() { return TUNES.length > 0; }
+function padCount() { return melodyUi() ? 6 : 7; }
 let CURINVERT = false;
 const DEGCOL = [
   [1.00, 0.88, 0.30],
@@ -635,6 +640,7 @@ function bakePad(i) {
   }
   x.restore();
   const deg = PADORDER[i];
+  if (deg == null) return; // hidden pad (melody dark pad): keep last bake
   const dark = st === 1 || st === 2;
   x.textAlign = "center"; x.textBaseline = "middle";
   // label aspect compensation: the pad quad narrows with pxScale (portrait),
@@ -642,7 +648,7 @@ function bakePad(i) {
   const pxScale = Math.min(1, (W / H) * 0.62);
   const padWq = Math.min(0.8, 0.9 * pxScale * 0.92);
   const a = Math.min(8, Math.max(1, 1 / ((padWq / 0.5) * 0.6)));
-  const label = melodyTune ? String(deg + 1) : (CURINVERT ? ROMANF[deg] : CHORDS[deg].replace("dim", "\u00B0"));
+  const label = melodyUi() ? String(deg + 1) : (CURINVERT ? ROMANF[deg] : CHORDS[deg].replace("dim", "\u00B0"));
   x.save(); x.translate(160, 94); x.scale(a, 1);
   x.font = "700 100px 'Archivo Black', sans-serif";
   const tw = x.measureText(label).width;
@@ -662,7 +668,7 @@ function bakePad(i) {
   x.restore();
   reTex(padTex[i], padCvs[i]);
 }
-function renderPads() { for (let i = 0; i < 7; i++) bakePad(i); }
+function renderPads() { for (let i = 0; i < padCount(); i++) bakePad(i); }
 // key plate
 const keyCv = mkCanvas(512, 256);
 const keyTex = texFromCanvas(keyCv);
@@ -902,19 +908,37 @@ async function loadTunes() {
     if (running && !melodyTune && !over) {
       pickTune();
       melodySeq.length = 0; melodyNoteLog.length = 0;
-      PADORDER = [0, 1, 2, 3, 4, 5, 6];
+      PADORDER = MELODY_PADS;
+      renderPads();
+      setKey(KEYSYM); // re-bake the fneg example for melody mode
+      setHint();
+    } else if (!running) {
+      // still on the splash: flip the fneg example + attract pads to melody mode
+      const ex = $("fneg");
+      if (ex) ex.textContent = "e.g. \u201C3 in " + KEYSYM + "\u201D = " + NOTE[(KEYROOT + SCL[2]) % 12];
+      PADORDER = MELODY_PADS;
+      renderPads();
     }
   } catch (e) {
     if (!melodyFellBack) {
       melodyFellBack = true;
       console.log("[stacks] tunes.json unavailable (" + ((e && e.message) || "?") + ") - falling back to classic random-note mode");
+      setHint();
     }
     TUNES = [];
   }
 }
-function pickTune() {
-  melodyTune = TUNES.length ? TUNES[Math.floor(Math.random() * TUNES.length)] : null;
+let melodyTuneHistory = [];
+function pickTune(avoid) {
+  if (!TUNES.length) { melodyTune = null; melodyCursor = 0; return; }
+  let t = TUNES[Math.floor(Math.random() * TUNES.length)];
+  if (avoid && TUNES.length > 1) {
+    let n = 0;
+    while (t === avoid && n++ < 8) t = TUNES[Math.floor(Math.random() * TUNES.length)];
+  }
+  melodyTune = t;
   melodyCursor = 0;
+  if (melodyTuneHistory.indexOf(t) < 0) melodyTuneHistory.push(t);
 }
 loadTunes(); // fire-and-forget: classic mode kicks in if the dataset never arrives
 // melody voice: the prompt note is SUSTAINED for the whole round (louder +
@@ -933,7 +957,7 @@ function melodyKill(t, dur) {
 function melodyStart(t) {
   if (!AC) return;
   melodyKill(t, 0.12);
-  const m = KEYROOT + SCL[targetDeg];
+  const m = KEYROOT + SCL[targetDeg] + 12; // +1 octave: sit above the pad/sub drone
   const F = midi(m);
   const g = AC.createGain(); g.connect(duck); g.connect(delaySend);
   g.gain.setValueAtTime(0.0001, t);
@@ -958,24 +982,31 @@ function newPrompt() {
     const nq = lastQuarterAC + Math.round((AC.currentTime - lastQuarterAC) / spb) * spb;
     promptLog.push({ round: roundNo, deltaMs: +((AC.currentTime - nq) * 1000).toFixed(1) });
   }
-  if (!melodyTune) PADORDER = shuffleArr([0,1,2,3,4,5,6]); // melody mode: fixed 1-7 order (learnable layout)
+  if (melodyTune) PADORDER = MELODY_PADS; // 6 pads 2-7, fixed order (learnable layout)
+  else PADORDER = shuffleArr([0,1,2,3,4,5,6]); // classic: pads shuffle every round
   let p;
   if (melodyTune) {
     // melody mode: prompt note = next tune note; inverted rounds are suppressed
     // (they show chords, not melody notes). Root notes (degree 1) are SKIPPED:
     // in the shown key the root's note name IS the key name ("E in key of E") -
     // the prompt would add no information. If the whole tune is roots, present
-    // them anyway so the skip terminates.
+    // them anyway so the skip terminates. When the head is exhausted the game
+    // rolls a NEW random tune instead of looping the same one.
     CURINVERT = false;
-    const head = melodyTune.head;
-    let deg = head[melodyCursor % head.length][0];
-    if (head.some(n => n[0] !== 1)) {
-      while (deg === 1) {
-        melodyCursor = (melodyCursor + 1) % head.length;
-        deg = head[melodyCursor % head.length][0];
+    let head = melodyTune.head;
+    let deg;
+    for (let guard = 0; guard < 64; guard++) {
+      if (melodyCursor >= head.length) {
+        const prev = melodyTune;
+        pickTune(prev);
+        if (melodyTune !== prev) showFloat("NEW TUNE", { slot: 1, color: [1.0, 0.88, 0.30], dur: 1200 });
+        head = melodyTune.head; // pickTune resets melodyCursor to 0
       }
+      deg = head[melodyCursor][0];
+      if (deg !== 1 || !head.some(n => n[0] !== 1)) break; // root: skip (present for all-root tunes)
+      melodyCursor++;
     }
-    melodyCursor = (melodyCursor + 1) % head.length;
+    melodyCursor++;
     targetDeg = deg - 1; // game pad indices are 0-based; tune degrees are 1-7
     melodySeq.push(deg);
     p = { f: NOTE[(KEYROOT + SCL[deg - 1]) % 12], d: deg };
@@ -1079,6 +1110,7 @@ let ARP = ARP_PAT.map(o => 52 + o);
 const pips = [$("pip0"), $("pip1"), $("pip2")];
 function answer(i, padEl) {
   if (!running || paused || over || !roundOpen) return;
+  if (i >= padCount()) return; // dark pad (key L in melody mode): no-op, not a miss
   ensureAudio();
   const deg = PADORDER[i];
   const pxS = Math.min(1, (W / H) * 0.62); // pad world-space x scale (same as the render arc)
@@ -1141,7 +1173,7 @@ function answer(i, padEl) {
     padState[i] = 2; padShake[i] = 14; bakePad(i);
     setTimeout(() => { padState[i] = 0; bakePad(i); }, 260);
     const ti = PADORDER.indexOf(targetDeg);
-    padState[ti] = 1; bakePad(ti); setTimeout(() => { padState[ti] = 0; bakePad(ti); }, 300);
+    if (ti >= 0) { padState[ti] = 1; bakePad(ti); setTimeout(() => { padState[ti] = 0; bakePad(ti); }, 300); }
     showFloat("WRONG — " + (melodyTune ? NOTE[(KEYROOT + SCL[targetDeg]) % 12] : (CURINVERT ? ROMANF[targetDeg] : CHORDS[targetDeg].replace("dim", "\u00B0"))), { slot: 0, color: [1, 0.55, 0.5], dur: 900, x: floatAt.x, y: floatAt.y, z: floatAt.z });
     pimplosion(P.x, P.y, P.z, 60, [1.0, 0.33, 0.25], 4.5, 0.6, 5);
     // miss juice: red shock ring from the pad + stronger shake
@@ -1341,7 +1373,9 @@ function showEndScreen() {
   sl.innerHTML =
     '<span class="lbl">SCORE</span>' +
     '<div id="gscore">' + score + "</div>" +
-    (melodyTune ? '<div id="tuneline" class="sml">you just played: ' + melodyTune.title + " - " + melodyTune.composer + "</div>" : "") +
+    (melodyTuneHistory.length ? '<div id="tuneline" class="sml">you just played: ' + (melodyTuneHistory.length === 1
+      ? melodyTuneHistory[0].title + " - " + melodyTuneHistory[0].composer
+      : melodyTuneHistory.map(t => t.title).join(" \u00B7 ")) + "</div>" : "") +
     '<div id="bestline"><span class="lbl">HIGH SCORE</span><b>' + best + "</b>" +
     (bestNew ? '<span class="newbest">NEW HIGH SCORE</span>' : "") + "</div>" +
     '<div class="sml">KEYS VISITED ' + keysVisited.size + " \u00B7 MAX BPM " + maxBpm + "</div>" +
@@ -1365,7 +1399,9 @@ function start() {
   keysVisited.clear();
   roundNo = 0;
   resetRotation();
+  melodyTuneHistory.length = 0;
   pickTune(); melodySeq.length = 0; melodyNoteLog.length = 0;
+  setHint();
   if (BPM !== BPM_BASE) setBPM(BPM_BASE, "down");
   setKey("E");
   if (AC) {
@@ -1395,6 +1431,9 @@ function ensureAudio() {
 }
 const chip = $("audiochip");
 const hintEl = $("hint");
+const HINT_CLASSIC = "D F G H J K L &nbsp;=&nbsp; the pads &nbsp;·&nbsp; P = pause &nbsp;·&nbsp; ON THE BEAT = bonus";
+const HINT_MEL = "D F G H J K &nbsp;=&nbsp; pads 2-7 &nbsp;·&nbsp; P = pause &nbsp;·&nbsp; ON THE BEAT = bonus";
+function setHint() { hintEl.innerHTML = melodyTune ? HINT_MEL : HINT_CLASSIC; }
 chip.addEventListener("pointerdown", e => { e.preventDefault(); ensureAudio(); });
 document.addEventListener("pointerup", ensureAudio);
 $("startbtn").addEventListener("click", start);
@@ -1911,7 +1950,8 @@ function frame() {
   {
     const hintTopCss = window.innerHeight - hintEl.getBoundingClientRect().height;
     let low = null, sc = 0;
-    for (let i = 0; i < 7; i++) {
+    const nC = padCount();
+    for (let i = 0; i < nC; i++) {
       const Pp = PADPOS[i];
       const px = Pp.x * pxScale, py = Pp.y + pyLift, pz = Pp.z;
       const b = project([px, py - Pp.h / 2, pz], PV);
@@ -1926,7 +1966,9 @@ function frame() {
       if (overshoot > 0) pyLift += Math.min(overshoot / sc, 0.9);
     }
   }
-  for (let i = 0; i < 7; i++) {
+  const nP = padCount();
+  for (let i = nP; i < 7; i++) padScreen[i] = null; // dark pads: not hit-testable
+  for (let i = 0; i < nP; i++) {
     const Pp = PADPOS[i];
     const bob = running && !paused && !over ? Math.sin(cam.t * 0.002 + i * 0.8) * 0.015 : 0;
     const jx = padShake[i] > 0 ? (Math.random() - 0.5) * padShake[i] * 0.01 : 0;
@@ -2014,6 +2056,7 @@ window.__stacke = {
   key: () => KEYSYM, chords: () => CHORDS.slice(), arp: () => ARP.slice(),
   tunes: () => TUNES.length, fallback: () => melodyFellBack,
   melody: () => melodyTune ? { title: melodyTune.title, composer: melodyTune.composer, head: melodyTune.head, cursor: melodyCursor } : null,
+  tunesPlayed: () => melodyTuneHistory.map(t => t.id),
   voice: () => melodyVoice ? "sustaining" : "off",
   seq: () => melodySeq.slice(), noteEvents: () => melodyNoteLog.slice(),
   shownNote: () => melodyTune ? NOTE[(KEYROOT + SCL[targetDeg]) % 12] : CHORDS[targetDeg],
